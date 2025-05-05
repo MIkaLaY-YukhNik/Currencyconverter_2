@@ -3,7 +3,9 @@ package com.example.currencyconverter.service;
 import com.example.currencyconverter.entity.CurrencyRate;
 import com.example.currencyconverter.model.CurrencyResponse;
 import com.example.currencyconverter.repository.CurrencyRateRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Map;
@@ -11,31 +13,44 @@ import java.util.Map;
 @Service
 public class CurrencyService {
 
-    private final String API_KEY = "dd23561225204beca0c5fe1cf9bd0d16";
-    private final String API_URL = "https://openexchangerates.org/api/latest.json?app_id=" + API_KEY;
+    private final String API_URL = "https://openexchangerates.org/api/latest.json?app_id=";
+    private final String apiKey;
     private final RestTemplate restTemplate;
     private final CurrencyRateRepository currencyRateRepository;
 
-    public CurrencyService(RestTemplate restTemplate, CurrencyRateRepository currencyRateRepository) {
+    public CurrencyService(RestTemplate restTemplate, CurrencyRateRepository currencyRateRepository,
+                           @Value("${open.exchange.api.key:}") String apiKey) {
         this.restTemplate = restTemplate;
         this.currencyRateRepository = currencyRateRepository;
+        this.apiKey = apiKey;
     }
 
     public CurrencyResponse fetchExchangeRates() {
-        CurrencyResponse response = restTemplate.getForObject(API_URL, CurrencyResponse.class);
-        if (response == null || response.getRates() == null) {
-            throw new RuntimeException("Unable to fetch exchange rates");
+        if (apiKey.isEmpty()) {
+            throw new RuntimeException("API key for Open Exchange Rates is not provided");
         }
 
-        Map<String, Double> rates = response.getRates();
-        for (Map.Entry<String, Double> entry : rates.entrySet()) {
-            String currency = entry.getKey();
-            Double rate = entry.getValue();
-            CurrencyRate currencyRate = new CurrencyRate(currency, rate);
-            currencyRateRepository.save(currencyRate);
-        }
+        String fullApiUrl = API_URL + apiKey;
+        try {
+            CurrencyResponse response = restTemplate.getForObject(fullApiUrl, CurrencyResponse.class);
+            if (response == null || response.getRates() == null) {
+                throw new RuntimeException("Unable to fetch exchange rates: empty response");
+            }
 
-        return response;
+            Map<String, Double> rates = response.getRates();
+            for (Map.Entry<String, Double> entry : rates.entrySet()) {
+                String currency = entry.getKey();
+                Double rate = entry.getValue();
+                CurrencyRate currencyRate = new CurrencyRate(currency, rate);
+                currencyRateRepository.save(currencyRate);
+            }
+
+            return response;
+        } catch (HttpClientErrorException e) {
+            throw new RuntimeException("Failed to fetch exchange rates: " + e.getStatusCode() + " - " + e.getResponseBodyAsString());
+        } catch (Exception e) {
+            throw new RuntimeException("Unexpected error while fetching exchange rates: " + e.getMessage());
+        }
     }
 
     public double convertAmount(String from, String to, double amount, CurrencyResponse rates) {
